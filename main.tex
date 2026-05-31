@@ -1,0 +1,967 @@
+﻿
+%% 
+%% Copyright 2007-2024 Elsevier Ltd
+%% 
+%% This file is part of the 'Elsarticle Bundle'.
+%% ---------------------------------------------
+\documentclass[preprint,number,5p,twocolumn]{elsarticle}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
+\usepackage{amsthm,amsmath}
+\usepackage{hyperref}
+\usepackage[switch]{lineno}
+\usepackage{etoolbox}
+\newcommand*\patchAmsMathEnvironmentForLineno[1]{%
+  \expandafter\let\csname old#1\expandafter\endcsname\csname #1\endcsname
+  \expandafter\let\csname oldend#1\expandafter\endcsname\csname end#1\endcsname
+  \renewenvironment{#1}%
+    {\linenomath\csname old#1\endcsname}%
+    {\csname oldend#1\endcsname\endlinenomath}}%
+\newcommand*\patchBothAmsMathEnvironmentsForLineno[1]{%
+  \patchAmsMathEnvironmentForLineno{#1}%
+  \patchAmsMathEnvironmentForLineno{#1*}}%
+\AtBeginDocument{%
+  \patchBothAmsMathEnvironmentsForLineno{equation}%
+  \patchBothAmsMathEnvironmentsForLineno{align}%
+  \patchBothAmsMathEnvironmentsForLineno{gather}%
+  \patchBothAmsMathEnvironmentsForLineno{multline}%
+  \patchBothAmsMathEnvironmentsForLineno{flalign}%
+}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{dblfloatfix}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{placeins}
+\usepackage{tcolorbox}
+
+\newtcolorbox{rqbox}{
+  colback=gray!10,
+  colframe=gray!60,
+  boxrule=0.8pt,
+  arc=3pt,
+  left=6pt,
+  right=6pt,
+  top=4pt,
+  bottom=4pt
+}
+
+\DeclareMathOperator{\scp}{scp}
+
+\journal{Journal of Systems and Software}
+
+\begin{document}
+\begin{frontmatter}
+
+\title{\textbf{\textit{One Model to Rule Them All:}} Unifying Test Coverage\\
+ via a Transformer-based Fuzzing for Deep Neural Networks}
+
+%\author[]{Anonymous Submission}
+\author[label1]{Tianli Wang}
+ \ead{2304240111@wtu.edu.cn} 
+\author[label1]{Benxiao Tang}
+ \ead{bxtang@wtu.edu.cn}
+\author[label1]{Fei Zhu}
+ \ead{zf@wtu.edu.cn} 
+\author[label2]{Weixiang Ren}
+ \ead{renweixiang@zua.edu.cn}
+\author[label3]{Yiru Zhao}
+ \ead{zhaoyiru@whu.edu.cn} 
+\author[label1]{Aoshuang Ye\corref{cor1}}
+ \ead{asye@wtu.edu.cn} 
+
+\address[label1]{School of Computer Science and Artificial Intelligence, Wuhan Textile University, Wuhan, 430200, China}
+\address[label2]{School of Computer Science, Zhengzhou University of Aeronautics, Zhengzhou, 450046, China}
+\address[label3]{School of Cyber Science and Engineering, Wuhan University, Wuhan, 430072, China}
+\cortext[cor1]{Corresponding author}
+
+
+%% Abstract
+\begin{abstract}
+Deep neural networks (DNNs) are increasingly used in safety-critical software systems, but their robustness remains difficult to assess before deployment. Coverage-guided fuzzing (CGF) provides an automated way to expose DNN defects, yet most existing methods rely on pre-defined structural coverage criteria. The resulting scalar coverage values often correlate weakly and inconsistently with model faults. This paper proposes a learning-based CGF approach centered on a Coverage-based Predictor (CP). CP treats statistical features derived from multiple coverage criteria as structured representations of DNN behavior and uses a Transformer with criterion-aware gating to learn their association with failures. We further introduce Latent Space Clustering Coverage (LSCC) to characterize behavioral-cluster exploration and combine CP risk scores with LSCC coverage gains as dual feedback for test generation. 
+
+The approach is evaluated on four datasets, 14 distinct DNN architectures, and 20 model-dataset combinations. CP achieves an average AUC-ROC of 0.890 and an average AUC-PR of 0.699 for sample-level fault prediction, together with an average cluster-level Spearman coefficient of 0.809. In practical fuzzing, the proposed method achieves an average fault detection rate of 84.7\%, exceeding the best baseline by 4.2 percentage points. These results suggest that learning from heterogeneous coverage criteria can provide a more fault-aware guidance signal while preserving behavioral-space exploration during DNN fuzzing.
+\end{abstract}
+
+%% Keywords
+\begin{keyword}
+Deep learning testing \sep Coverage-guided fuzzing \sep Structural coverage \sep Transformer
+\end{keyword}
+\end{frontmatter}
+\makeatletter
+\let\@makecol\@LN@makecol
+\makeatother
+\linenumbers
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Introduction}
+
+\par Deep neural networks (DNNs) are currently embedded in software systems for autonomous driving~\cite{MoussaMA26}, intelligent healthcare~\cite{KhanSTGSZAA26}, industrial inspection~\cite{ZhangHZSSXW26}, etc. The deployment in such settings is still constrained by robustness concerns. Inputs affected by distribution shift, adversarial perturbation, or rare edge-case conditions may lead to unexpected erroneous outputs, with direct consequences for system safety and reliability. Systematically evaluating model reliability and exposing potential defects before deployment has therefore become a central problem in the quality assurance of deep learning systems~\cite{HuangKRSSTWY20, RiccioJSHWT20, ZhangHML22}.
+
+\par Coverage-guided fuzzing (CGF) is a widely used automated testing technique for DNNs. Inspired by code coverage in traditional software testing, researchers have proposed neuron-activation-based test adequacy criteria to characterize the internal states of models under test (MuTs). Representative criteria include neuron coverage (NC)~\cite{PeiCYJ19}, multi-granularity criteria such as $k$-multisection neuron coverage (KMNC), neuron boundary coverage (NBC), strong neuron activation coverage (SNAC), and Top-$k$ neuron coverage (TKNC)~\cite{MaJZSXLCSLLZW18}, as well as combinatorial coverage~\cite{MaJXLLLZ19}. CGF tools~\cite{OdenaOAG19, GuoJZCS18, XieMJXCLZLYS19} use increments in these criteria as feedback to optimize test inputs and explore new model behavioral states. CGF has also been extended beyond image classifiers; e.g., Shi \emph{et al.} proposed multi-granularity coverage criteria for deep reinforcement learning systems based on states, actions, and policies~\cite{ShiYZ24}. The value of this line of work depends on whether coverage signals are informative about both behavioral diversity and fault risk.
+
+\par Nevertheless, the reliability of coverage growth as a feedback signal for model fault revealing has been questioned~\cite{LiM0C19, YanTLZMX020, Harel-CanadaWGG20, YangSAL22}. Existing CGF methods usually assume that new coverage units or coverage growth indicate effective exploration of the model behavioral state space and thus increase the probability of fault exposure. A number of empirical studies suggest that this assumption is not always reliable in DNN testing. Li \emph{et al.} argued that structural coverage criteria for DNNs could be misleading, as the fault-revealing capability observed in high-coverage testing may come more from adversary-oriented search than from the coverage criteria themselves~\cite{LiM0C19}. Yan \emph{et al.} found no stable monotonic relationship between DNN model coverage and model quality~\cite{YanTLZMX020}. Harel-Canada \emph{et al.} further showed that simply increasing neuron coverage may reduce testing effectiveness~\cite{Harel-CanadaWGG20}. Yang \emph{et al.} also confirmed that coverage-driven methods are weaker than gradient-based methods in uncovering DNN failures and improving model robustness~\cite{YangSAL22}. Similar weak correlations have been observed for testing properties such as robustness and fairness~\cite{DongZWLSH0WDD20, zheng2024empirical}. More recently, Wang \emph{et al.} systematically evaluated multiple structural coverage criteria and reported that their fault-revealing ability is criterion-dependent and context-dependent~\cite{WangXFCLL24}. Taken together, these findings suggest that traditional structural coverage criteria do not provide a stable characterization of model faults and that coverage growth should not be treated as direct evidence of stronger fault-revealing capability.
+
+\par One reason for this limitation is the way coverage information is represented. Most existing CGF methods use predefined and scalarized forms of coverage based on manually specified activation thresholds, interval partitions, Top-$k$ rules, or combinatorial patterns. High-dimensional activation behaviors are therefore compressed into scalar coverage values or discrete coverage indicators. These representations are measurable and useful for search, but they leave the relationship between coverage and failures largely implicit. This makes it difficult to model nonlinear associations between coverage signals and model faults. Recent work has begun to move beyond simple coverage growth by using richer feedback for DNN testing. Zhang \emph{et al.} combined uncertainty and fault diversity for DNN robustness test selection~\cite{ZhangMDCY25}. Liu \emph{et al.} showed that carefully modeled neuron activation states can be linked to OOD detection, generalization, and robustness~\cite{LiuTLM024}. Guo \emph{et al.} further showed that incorporating neuron importance can improve coverage analysis for DNN testing~\cite{guo2024neuron}. These studies suggest that structural coverage is not inherently uninformative; the key issue is how coverage information is represented and exploited.
+
+\par Based on these observations, we propose a CGF approach based on structural representation learning. Instead of treating coverage only as an adequacy criterion to be directly optimized, we regard features derived from multiple coverage criteria as structural representations of internal model behavior. A Transformer-based learner is then used to model their relationship with model faults. Specifically, we extract continuous statistical features from ten coverage criteria and map them into a unified low-dimensional latent representation space. We then design a Coverage-based Predictor (CP)\footnote{The artifact of this work is available at \url{https://github.com/GVCMch/Coverage-based-Predictor}.}, which learns the association between multi-criteria coverage representations and model faults and outputs a continuous risk score for each test input. Unlike traditional coverage-growth feedback, CP focuses on the likelihood that an input will trigger a model fault. To maintain exploration of the MuT behavioral space, we further introduce Latent Space Clustering Coverage (LSCC), which partitions similar behavioral patterns into coverage units and tracks coverage according to cluster-level risk. CP prioritizes inputs that are more likely to trigger faults, while LSCC encourages the testing process to visit under-explored behavioral clusters. Together, these signals form a fuzzing guidance mechanism that combines fault-risk assessment with exploration adequacy.
+
+\par We conduct a systematic evaluation on four widely used datasets, 14 distinct DNN architectures, and 20 model-dataset combinations. The results demonstrate that CP correlates more strongly with model faults than individual coverage criteria. At the test-input level, CP achieves an average AUC-ROC of 0.890 and an average AUC-PR of 0.699. At the cluster level, CP achieves an average Spearman coefficient of 0.809. Under a fixed mutation budget of 10,000, our method achieves an average fault detection rate (FDR) of 84.7\%, outperforming the best baseline by 4.2 percentage points. Further risk stratification analysis shows that high-risk behavioral clusters have higher observed fault density than low-risk clusters, indicating that learning-based coverage modeling can improve the fault awareness of coverage signals.
+
+This paper has three main contributions.
+
+\begin{itemize}
+
+    \item We propose a learner-based modeling approach for structural coverage criteria. The approach transforms structural coverage criteria from quantitative adequacy metrics into learnable model behavioral representations, strengthening the association between coverage signals and model faults.
+
+    \item We design a transformer-based coverage-based predictor and combine it with latent space clustering coverage, supporting fault-risk assessment and behavioral-space exploration.
+
+    \item We evaluate the proposed method on four datasets, 14 distinct DNN architectures, and 20 model-dataset combinations. The results show that our method outperforms existing coverage criteria and baseline methods in sample-level AUC-ROC/AUC-PR, cluster-level Spearman correlation, and practical fault detection rate.
+
+\end{itemize}
+
+\par We organize this paper as follows. Section~\ref{sec:related} reviews DNN coverage criteria, coverage-guided testing, and learning-based fuzzing. Section~\ref{sec:method} presents the proposed CP-guided fuzzing method, including feature preprocessing, risk prediction, LSCC, and the dual-signal fuzzing objective. Section~\ref{sec:experiment} describes the datasets, models, baselines, metrics, and parameter settings used in the evaluation. Section~\ref{sec:results} reports the correlation, effectiveness, and interpretability results. Section~\ref{sec:conclusion} concludes the paper and discusses future work.
+
+\section{Related Work}\label{related}\label{sec:related}
+
+\subsection{CGF for Deep Learning}
+
+Neuron-based coverage criteria are among the most widely used test adequacy criteria in white-box testing for DNNs. \textit{DeepXplore} first introduced NC, which measures the proportion of activated neurons and uses it to characterize how test inputs explore the internal behavioral states of a model~\cite{PeiCYJ19}. Ma \emph{et al.} further proposed \textit{DeepGauge}, which includes multi-granularity neuron coverage criteria such as KMNC, NBC, SNAC, and TKNC. These criteria describe model behavior from the perspectives of activation intervals, boundary behaviors, and activation patterns~\cite{MaJZSXLCSLLZW18}. DeepCT extends this line of work by considering combinatorial relations among neuron activations~\cite{MaJXLLLZ19}. Sun \emph{et al.} proposed modified condition/decision coverage (MC/DC)-inspired structural criteria to capture structural dependencies between adjacent layers~\cite{SunHKSHA19}. Although these criteria differ in form, they all belong to structural coverage criteria. Their common feature is that they rely on predefined activation rules, interval partitions, or combinatorial relations to transform continuous high-dimensional activation behaviors into measurable coverage events or values.
+
+Based on these coverage criteria, CGF methods further use coverage increments as feedback signals to guide test generation. \textit{TensorFuzz} uses coverage feedback to guide input mutation in the activation space~\cite{OdenaOAG19}. \textit{DeepHunter} adopts image transformations as mutation operators and retains test inputs that increase coverage~\cite{XieMJXCLZLYS19}. \textit{DLFuzz} uses lightweight perturbations to generate tests and employs neuron coverage feedback to guide the search process~\cite{GuoJZCS18}. Beyond structural coverage, Surprise Adequacy defines testing adequacy from the perspective of deviation from training activation distributions~\cite{KimFY19}. Yuan \emph{et al.} proposed a layer-wise distribution-aware criterion to better capture distributional differences in neuron activations~\cite{YuanPW23}. Huang \emph{et al.} further introduced hierarchical distribution-aware testing to model distributional behaviors at different levels~\cite{HuangZBCH24}. These methods provide quantifiable views of DNN internal behavior, but their feedback signals still largely depend on predefined rules, interval partitions, combinatorial relations, or distributional assumptions.
+
+Nevertheless, whether coverage growth can stably reflect fault revealing capability has been questioned by a series of empirical studies. Li \emph{et al.} argued that structural coverage criteria for DNN testing can be misleading, because the fault-finding capability observed in high-coverage testing may come more from adversary-oriented search than from the coverage criteria themselves~\cite{LiM0C19}. Yan \emph{et al.} found no stable monotonic relationship between DNN model coverage and model quality~\cite{YanTLZMX020}. Harel-Canada \emph{et al.} further showed that simply increasing neuron coverage may reduce testing effectiveness~\cite{Harel-CanadaWGG20}. Yang \emph{et al.} confirmed through a replication study that coverage-driven methods are weaker than gradient-based methods in uncovering DNN failures and improving model robustness~\cite{YangSAL22}. Dong \emph{et al.} observed limited correlation between coverage and robustness~\cite{DongZWLSH0WDD20}. Zheng \emph{et al.} reported similar limited correlation between neuron coverage criteria and DNN fairness~\cite{zheng2024empirical}. Wang \emph{et al.} recently showed that the fault revealing capability of structural coverage criteria is criterion-dependent and context-dependent~\cite{WangXFCLL24}. These studies suggest that the problem is not merely an insufficient design of a particular coverage criterion, but the lack of a stable mapping between rule-defined coverage feedback and model fault risk.
+
+Structural coverage criteria and distribution-based criteria both contain information about model behavioral states. However, traditional CGF usually uses their scalar coverage values or coverage increments directly as feedback signals, making it difficult to capture the nonlinear association between coverage features and model faults. Therefore, this paper moves beyond treating coverage as a single rule-defined metric. We use the statistical features produced by multiple coverage criteria as model behavioral representations, and employ a learner to reconstruct the relationship between coverage signals and model faults.
+
+\subsection{Learning-Based Fuzzing}
+
+Learning-based methods have been widely used to enhance test generation and guidance in traditional software testing, particularly in greybox CGF, where learners are often utilized to strengthen heuristic rules. Qiu et al. reported that learning models have been applied to key stages of coverage-guided greybox fuzzing, including seed generation, seed selection, and mutation, to improve validity, path exploration efficiency, and vulnerability discovery capability~\cite{qiu2025survey}. For instance, Learn\&Fuzz uses neural networks to learn the structure of PDF inputs and generate more effective fuzzing inputs~\cite{GodefroidPS17}. DeepSmith formulates compiler test program generation as a language modeling problem and learns program structures from code corpora~\cite{CumminsPML18}. MEUZZ uses machine learning to predict seed utility for improving seed scheduling in hybrid fuzzing~\cite{ChenAFWL20}. FuzzGuard trains a model to predict whether an input can reach the target code and filters out unreachable inputs before execution~\cite{ZongLWDL020}. NEUZZ approximates program branching behavior with neural networks and uses gradient information to guide input mutation~\cite{ShePEYRJ19}. These studies show that introducing learners into traditional CGF does not replace coverage feedback. Instead, learners improve the original rule-driven testing guidance mechanism by learning input structures, seed utility, path reachability, or mutation benefits.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Methodology}\label{sec:method}
+\begin{figure*}[!t]
+  \centering
+  \includegraphics[width=1.0\textwidth]{figures/ONE-to-rule-workflow.jpg}
+  \caption{The workflow of our method.}\label{fig:overview}
+\end{figure*}
+
+We propose a learning-based CGF method that uses structural coverage representations of the models under test. Figure~\ref{fig:overview} summarizes the pipeline. First, statistical features are extracted from ten coverage criteria and projected with PCA to obtain compact criterion-wise representations. Second, CP learns the association between these representations and model faults, producing a continuous risk score for each test input. Third, the learned latent representations are clustered to identify high-risk and low-risk behavioral regions. Finally, risk assessment and cluster coverage are combined as dual feedback for fuzzing. The design separates two roles that are often conflated in coverage-guided testing: estimating fault risk and maintaining exploration.
+
+\subsection{Feature Preprocessing}\label{sec:feature}
+
+A single coverage criterion can measure how a testing tool explores the state space of a model under test~\cite{YuanPW23}. Its effectiveness, however, is constrained by the assumptions embedded in its rule design. We therefore do not introduce another hand-crafted coverage criterion. Instead, we treat coverage information as structured training data and use a learner to model its relationship with model faults. This design aims to convert heterogeneous coverage criteria into a fault-aware feedback signal for CGF.
+
+For a trained model $f$ and an input $x$, we extract features from ten coverage criteria, including eight structural criteria and two distribution-based criteria. Specifically, NC is based on the neuron activation ratio~\cite{PeiCYJ19}. NBC, SNAC, KMNC, TKNC, and TKNP are derived from threshold triggering, interval partitioning, and Top-$k$ activation patterns in \textit{DeepGauge}~\cite{MaJZSXLCSLLZW18}. CC captures combinatorial relationships among neurons~\cite{JiMYW23}. NLC measures nonlinear activation responses from a layer-wise and distribution-aware perspective~\cite{YuanPW23}. For the aforementioned eight structural criteria, we preserve the layer-wise or neuron-wise activation vectors $c_i(x) \in \mathbb{R}^{d_i}$ ($i = 1,\dots,8$), rather than using only scalar coverage values. We further include LSA (Likelihood-based Surprise Adequacy) and DSA (Distance-based Surprise Adequacy) as distributional criteria, which measure the deviation of a test input from the training distribution in the activation space~\cite{KimFY19}. Thus, structural and distribution-based criteria are jointly represented as continuous statistical features, providing diverse perspectives on model behavioral states.
+
+\begin{equation}\label{eq:latent}
+  z(x) = \bigl[z_1(x),\; z_2(x),\; \dots,\; z_{10}(x)\bigr]
+\end{equation}
+
+To align the feature dimensions and remove redundancy, we apply PCA to the pre-processed features of each coverage criterion. This projects the features into a low-dimensional space while preserving as much variance information as possible. The target dimension $d$ is selected by cross-validation from the candidate set $\{4, 8, 16, 32, 64\}$, and the optimal value may vary across datasets. After dimensionality reduction, each criterion is represented as $z_i(x) \in \mathbb{R}^{d}$ ($i = 1, \dots, 10$). The ten criterion representations are then concatenated and organized as the feature matrix $C(x) = [z_1(x), \dots, z_{10}(x)] \in \mathbb{R}^{10 \times d}$, which is used as the input to CP.
+
+\FloatBarrier
+
+\subsection{Coverage-Driven Transformer}\label{sec:predictor}
+
+\begin{figure*}[!t]
+  \centering
+  \includegraphics[width=0.95\textwidth]{figures/Figure2.png}
+  \caption{Internal architecture of CP. PCA features are reshaped into criterion tokens, projected with linear layers, and augmented with model and criterion type embeddings. The CAG module adaptively weights each criterion, followed by a Transformer Encoder and MLP prediction head.}\label{fig:cp-arch}
+\end{figure*}
+
+Most structural coverage criteria define the activation space through predefined rules, which limits their expressiveness to the granularity of those rules. CP is built on a Transformer architecture to learn associations between coverage features and faults from data. It produces a continuous risk score for each test input, rather than a binary decision about whether a coverage unit has been exercised.
+
+\subsubsection{Criterion-Aware Gating}
+
+CP treats the feature vectors of ten coverage criteria as a sequence and models their interactions through Transformer self-attention. For input $x$, its coverage feature matrix $C(x) \in \mathbb{R}^{10 \times d}$ is linearly projected to obtain criterion token representations, with learnable criterion type embeddings $e_i^{\mathrm{crit}}$ added to encode criterion identity. A learnable CLS token serves as a global aggregation node, and the target-model embedding $e_m$ distinguishes behavioral characteristics across models under test.
+
+Different criteria exhibit varying discriminative power across model architectures. NC, for instance, can distinguish behaviors in shallow networks but may plateau in deeper architectures. We design the Criterion-Aware Gating (CAG) module to learn model-specific differences in criterion importance and assign weights accordingly. As shown in Eq.~\ref{eq:cag}, CAG uses a bottleneck architecture with a two-layer feed-forward network. The network receives the concatenation of the criterion representation and model embedding as input, and produces the corresponding scalar gating weight:
+\begin{equation}\label{eq:cag}
+  g_i = \sigma\bigl(W_2 \, \mathrm{ReLU}(W_1 [h_i,\; e_m])\bigr),
+\end{equation}
+where $W_1$ is the dimensionality reduction matrix, $W_2$ is the output matrix, and $\sigma$ is the sigmoid function. The bias term of $W_2$ is initialized to a positive value, so that all criteria are approximately retained in the early training stage and useful information is not prematurely suppressed. The gating weight $g_i \in (0, 1)$ adaptively adjusts the contribution of criterion $i$ through element-wise multiplication $\tilde{h}_i = g_i \cdot h_i$.
+
+The gated token sequence is concatenated with the CLS token and fed into a single-layer Transformer encoder, which captures inter-criterion interactions via self-attention. The CLS token output is passed through a two-layer MLP prediction head (with Dropout) to produce the fault probability $\mathrm{scp}(x)$ via a logit and sigmoid function.
+
+\subsubsection{Training Process}
+
+During training, misclassification is used as the fault oracle: correctly classified samples are labeled as 0 and misclassified samples as 1. The model is optimized with binary cross-entropy loss and label smoothing to reduce overfitting. During inference, $\mathrm{scp}(x) = \sigma(l(x))$ is used as the fault probability estimate, referred to as the \emph{risk score} in this paper. Misclassification is a conservative oracle. It may label genuinely difficult examples as faults, and it may miss faults that do not manifest as misclassification. More expressive oracles, such as differential testing or metamorphic relations, could reduce this limitation but are outside the scope of this work.
+
+CP assigns a continuous risk score to each test input, but relying on risk signals alone can cause test cases to concentrate in local high-risk regions. We therefore introduce a structural coverage mechanism in the same latent representation space to maintain adequate exploration of the behavioral space.
+
+
+\subsection{LSCC}\label{sec:coverage}
+
+To prevent test concentration in local high-risk regions and ensure broader behavioral coverage, we introduce LSCC. It performs clustering in the latent representation space and explicitly tracks which behavioral clusters have been covered, directing testing toward unexplored regions.
+
+\subsubsection{Clustering Modeling}
+
+For each test input $x$, CP generates latent representation $h_{\mathrm{CLS}}(x) \in \mathbb{R}^d$ from the Transformer encoder's CLS token output. K-means clustering on these representations partitions the behavioral space into $K$ clusters $\{S_1, \dots, S_K\}$, where inputs in the same cluster share similar learned behavioral representations. During fuzzing, each new input $x'$ is assigned to its nearest cluster via $j^* = \arg\min_j \|h_{\mathrm{CLS}}(x') - \mu_j\|_2$, where $\mu_j$ is the centroid of cluster $j$.
+
+\subsubsection{Risk-Stratified Coverage}
+
+Based on risk scores, clusters are divided into high-risk and low-risk units. Cluster weights are defined by the mean risk score within each cluster; clusters with higher validation risk scores are treated as regions more likely to contain fault-triggering behaviors, so prioritizing their coverage can improve fault revealing efficiency. For each cluster $S_k$, the cluster weight is:
+\begin{equation}\label{eq:cluster-weight}
+  w_k = \mathbb{E}\bigl[\scp(x) \mid x \in S_k\bigr] = \frac{1}{|S_k|} \sum_{x \in S_k} \scp(x)
+\end{equation}
+These weights are computed on the validation set and remain fixed during fuzzing, so no test-set information enters the risk stratification. Clusters are sorted by $w_k$ and divided into high-risk clusters $\mathcal{H}$ (top 50\%) and low-risk clusters $\mathcal{L}$ (bottom 50\%). 
+The balanced coverage is defined as $\mathrm{Cov}(t) = \alpha \, \mathrm{Cov}_{\mathcal{H}}(t) + (1 - \alpha) \, \mathrm{Cov}_{\mathcal{L}}(t)$, where $\alpha > 0.5$ gives higher weight to high-risk clusters in the coverage metric. This risk stratification enables the testing process to prioritize high-risk regions while still maintaining exploration of low-risk regions.
+
+\subsubsection{Coverage Gain}
+
+During testing, the balanced coverage $\mathrm{Cov}(t)$ is progressively updated through cluster coverage events. When a new sample $x$ is assigned to the nearest cluster $C_j$ and $C_j$ has not yet been covered, it generates the following coverage gain:
+\begin{equation}\label{eq:coverage-gain}
+  \Delta C(x, t) =
+  \begin{cases}
+    \alpha / |\mathcal{H}|,       & \text{if } C_j \notin \mathrm{Covered}(t), C_j \in \mathcal{H} \\
+    (1 - \alpha) / |\mathcal{L}|, & \text{if } C_j \notin \mathrm{Covered}(t), C_j \in \mathcal{L} \\
+    0,                              & \text{otherwise}
+  \end{cases}
+\end{equation}
+where $\mathcal{H}$ and $\mathcal{L}$ denote the high-risk and low-risk cluster sets, and $\mathrm{Covered}(t)$ is the set of clusters covered up to step $t$. Covering a new high-risk cluster contributes $\alpha / |\mathcal{H}|$; covering a new low-risk cluster contributes $(1 - \alpha) / |\mathcal{L}|$. This weighting ensures that each accepted test input is evaluated according to its unique contribution to exploration.
+
+Combining risk scores with LSCC coverage gains allows the testing process to target high-risk regions while maintaining sufficient behavioral exploration.
+
+\subsection{Dual-Signal Fusion Guided Fuzzing}\label{sec:fuzzing}
+
+\textbf{Objective Function.} We integrate the risk prediction signal ($\scp$) and the LSCC signal into a unified objective. At each step $t$, a candidate input $x$ is evaluated using the fault probability $\scp(x)$ predicted by CP and the coverage gain $\Delta C(x, t)$ it would contribute. The guidance objective is defined as:
+\begin{equation}\label{eq:objective}
+  U(x, t) = \scp(x) + \lambda_{\mathrm{LSCC}} \cdot \Delta C(x, t)
+\end{equation}
+
+where $\scp(x)$ is the risk score (normalized to $[0,1]$ via Sigmoid),
+$\Delta C(x, t)$ is the sample-specific coverage gain defined in Eq.~\ref{eq:coverage-gain},
+and $\lambda_{\mathrm{LSCC}}$ controls the balance between risk orientation and exploration.
+With $K{=}50$ clusters, $\Delta C$ takes values in $[0,\, \alpha/|\mathcal{H}|] \approx [0, 0.04]$, which is comparable to the $[0,1]$ range of $\scp$; $\lambda_{\mathrm{LSCC}}$ further adjusts the balance per model via Bayesian optimization.
+
+\subsubsection{CP-Guided Fuzzer}
+
+The acceptance strategy combines guidance with random walk. If $U(x', t{+}1)$ exceeds the current threshold $U_{\mathrm{cur}}$, the mutant is accepted and the threshold updated. Otherwise, it is accepted with small probability $p_r$, and $U_{\mathrm{cur}} \leftarrow U(x', t{+}1)$ is reset to prevent monotonically increasing thresholds from blocking future acceptance.
+
+Algorithm~\ref{alg:fuzzing} presents the complete procedure. Each iteration samples from the seed pool, mutates the input, extracts multi-criteria coverage features, obtains latent representations, and computes the risk score via CP while updating cluster coverage. The dual-signal objective $U(x', t)$ determines whether the mutant enters the seed pool. Mutants that trigger misclassification are recorded as faults.
+
+\begin{algorithm}[!t]
+\small
+\caption{CP-Guided Fuzzing}\label{alg:fuzzing}
+\begin{algorithmic}[1]
+\Require Target model $f$; seed set $\mathcal{S}_0$; budget $B$;
+  CP model; cluster centers $\{\mu_j\}_{j=1}^{k}$;
+  risk partition $(\mathcal{H}, \mathcal{L})$ \Comment{high/low-risk clusters}; $\alpha$ \Comment{risk weight}; weight $\lambda_{\mathrm{LSCC}}$; accept prob.\ $p_r$
+\Ensure Fault set $\mathcal{F}$; FDR
+\State $\mathcal{S} \leftarrow \mathcal{S}_0$; $\mathcal{F} \leftarrow \emptyset$; $\mathrm{Covered} \leftarrow \emptyset$; $U_{\mathrm{cur}} \leftarrow 0$
+\For{$t = 1, \dots, B$}
+  \State $x \leftarrow \mathrm{Sample}(\mathcal{S})$; $x' \leftarrow \mathrm{Mutate}(x)$
+  \State $z(x') \leftarrow [\mathrm{PCA}_1(c_1(x')),\, \dots,\, \mathrm{PCA}_{10}(c_{10}(x'))]$ \Comment{coverage features + PCA}
+  \State $h_{\mathrm{CLS}}(x') \leftarrow \mathrm{CP}.\mathrm{encode}(z(x'),\, \mathrm{model\_id})$ \Comment{get CLS representation}
+  \State $\scp(x') \leftarrow \mathrm{CP}.\mathrm{predict}(h_{\mathrm{CLS}}(x'))$; $j^* \leftarrow \arg\min_j \|h_{\mathrm{CLS}}(x') - \mu_j\|_2$
+  \State $\Delta C(x', t) \leftarrow 0$
+  \If{$C_{j^*} \notin \mathrm{Covered}$} \Comment{compute gain without updating Covered yet}
+    \If{$C_{j^*} \in \mathcal{H}$} $\Delta C(x', t) \leftarrow \alpha / |\mathcal{H}|$
+    \Else $\Delta C(x', t) \leftarrow (1{-}\alpha) / |\mathcal{L}|$
+    \EndIf
+  \EndIf
+  \State $U(x', t) \leftarrow \scp(x') + \lambda_{\mathrm{LSCC}} \cdot \Delta C(x', t)$
+  \If{$U(x', t) > U_{\mathrm{cur}}$ \textbf{or} $\mathrm{rand}() < p_r$}
+    \State $\mathcal{S} \leftarrow \mathcal{S} \cup \{x'\}$; $U_{\mathrm{cur}} \leftarrow U(x', t)$
+    \If{$C_{j^*} \notin \mathrm{Covered}$} $\mathrm{Covered} \leftarrow \mathrm{Covered} \cup \{C_{j^*}\}$ \EndIf \Comment{update only on acceptance}
+  \EndIf
+  \If{$f(x') \neq y_{\mathrm{true}}$} $\mathcal{F} \leftarrow \mathcal{F} \cup \{x'\}$ \EndIf
+\EndFor
+\State \Return $\mathcal{F}$, $\mathrm{FDR} \leftarrow |\mathcal{F}| / B$
+\end{algorithmic}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\section{Experimental Setup}\label{sec:experiment}
+
+The evaluation examines whether CP gives a more useful guidance signal for DNN fuzzing. We consider its correlation with faults and its effect on fault revealing and diagnosis. The benchmark uses four computer vision datasets and 14 distinct DNN architectures, yielding 20 model-dataset combinations. The implementation is based on PyTorch 2.4.1 and NumPy 1.23.5. All experiments are conducted on a platform equipped with an NVIDIA GeForce RTX 4070 GPU.
+
+\textbf{Datasets.} The experiments use MNIST, Fashion, CIFAR-10, and TinyImageNet. These datasets provide a gradual increase in image size, channel count, class diversity, and visual complexity. MNIST and Fashion both contain $28 \times 28$ grayscale images, 10 classes, 60,000 training images, and 10,000 test images. They are resized to $32 \times 32$ and replicated to three channels for compatibility with standard convolutional architectures. This interpolation does not alter the classification task. CIFAR-10 contains 50,000 training images and 10,000 test images, with image size $32 \times 32$ and 10 classes. TinyImageNet contains 100,000 training images and 10,000 validation images, with image size $64 \times 64$ and 200 classes~\cite{le2015tiny}. Since the official TinyImageNet test labels are not publicly available, we use its validation set as the test set.
+
+\textbf{Models Under Test.} We select representative models on each dataset to cover architectures from lightweight networks to large-scale convolutional models. The benchmark contains 14 distinct architectures and 20 model-dataset combinations. MNIST uses the lightweight LeNet series (LeNet-3, LeNet-4, and LeNet-5)~\cite{lenet}. Fashion uses ResNet18, ResNet34~\cite{HeZRS16}, VGG11-BN, VGG13-BN~\cite{vgg}, MobileNetV2~\cite{mobilenet_v2}, and AlexNet~\cite{krizhevsky2012imagenet}. CIFAR-10 uses ResNet34, ResNet50~\cite{HeZRS16}, VGG13-BN, VGG16-BN~\cite{vgg}, DenseNet121~\cite{Densenet}, and MobileNetV2~\cite{mobilenet_v2}. TinyImageNet uses ResNet34, ResNet50~\cite{HeZRS16}, VGG19-BN~\cite{vgg}, DenseNet121, and DenseNet169~\cite{Densenet}, which better match its higher input resolution and larger number of classes. Since several architectures are evaluated on multiple datasets, all per-model tables report results at the model-dataset combination level. Detailed information is shown in Table~\ref{tab:models}.
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Models under test and details}\label{tab:models}
+  \resizebox{\linewidth}{!}{
+  \begin{tabular}{llccccc}
+    \toprule
+    Dataset & Model & Layers & Neurons & Parameters & PCA & $\lambda_{\mathrm{LSCC}}$ \\
+    \midrule
+    \multirow{3}{*}{MNIST}
+      & LeNet-3    & 5   & 2,572     & 11,754      & \multirow{3}{*}{4}  & 1.19 \\
+      & LeNet-4    & 3   & 1,028     & 3,246       &                     & 1.64 \\
+      & LeNet-5    & 7   & 8,094     & 61,706      &                     & 1.30 \\
+    \midrule
+    \multirow{6}{*}{Fashion}
+      & ResNet18    & 18  & 557,056   & 11,181,642  & \multirow{6}{*}{16} & 0.67 \\
+      & ResNet34    & 34  & 557,056   & 21,297,482  &                     & 1.18 \\
+      & VGG11\_BN   & 11  & 258,058   & 28,334,410  &                     & 0.07 \\
+      & VGG13\_BN   & 13  & 258,058   & 28,334,410  &                     & 2.00 \\
+      & MobileNetV2 & 105 & 1,639,946 & 2,236,682   &                     & 0.78 \\
+      & AlexNet     & 8   & 43,264    & 57,022,794  &                     & 0.89 \\
+    \midrule
+    \multirow{6}{*}{CIFAR-10}
+      & ResNet34    & 34  & 305,162   & 21,282,122  & \multirow{6}{*}{32} & 1.54 \\
+      & ResNet50    & 50  & 907,274   & 23,520,842  &                     & 0.94 \\
+      & VGG13\_BN   & 13  & 258,058   & 28,334,410  &                     & 2.00 \\
+      & VGG16\_BN   & 16  & 284,682   & 33,646,666  &                     & 0.67 \\
+      & DenseNet121 & 121 & 563,210   & 6,956,426   &                     & 0.18 \\
+      & MobileNetV2 & 105 & 1,639,946 & 2,236,682   &                     & 1.59 \\
+    \midrule
+    \multirow{5}{*}{TinyImageNet}
+      & ResNet34    & 34  & 557,056   & 21,479,592  & \multirow{5}{*}{32} & 2.00 \\
+      & ResNet50    & 50  & 907,274   & 23,520,842  &                     & 0.01 \\
+      & VGG19\_BN   & 19  & 311,050   & 139,611,850 &                     & 1.95 \\
+      & DenseNet121 & 121 & 563,210   & 7,037,258   &                     & 1.32 \\
+      & DenseNet169 & 169 & 1,248,906 & 12,642,954  &                     & 1.34 \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+\textbf{Evaluation Metrics.} We report four metrics because the evaluation involves both prediction quality and fuzzing effectiveness.
+
+\begin{itemize}
+\item \textbf{FDR} measures the proportion of unique fault-triggering inputs within a given test budget. It is defined as $|\mathcal{F}|/B$, where $\mathcal{F}$ is the set of distinct inputs that cause misclassification and $B$ is the total mutation budget. Counting unique fault-triggering inputs avoids inflating the metric by repeatedly triggering the same failure.
+
+\item \textbf{AUC-ROC} measures the discriminative ability of risk scores for fault samples, using misclassification labels as ground truth. Higher values indicate clearer separation between fault-triggering and non-fault inputs.
+
+\item \textbf{AUC-PR} measures the precision-recall trade-off under class imbalance. It emphasizes the identification of high-risk samples when faults are sparse.
+
+\item \textbf{Spearman coefficient} measures the monotonic correlation between risk scores and cluster-level fault rates. It tests whether risk stratification is aligned with the observed fault distribution.
+\end{itemize}
+
+In addition, cluster-level fault density is recorded to analyze whether risk stratification aligns with the observed failure distribution.
+
+\textbf{Baselines.} We compare CP with representative structural coverage criteria and DNN testing methods, including NC, NBC, SNAC, TKNC, KMNC, DLRegion~\cite{TaoTGH023}, and DistXplore~\cite{distxplore}. The NC threshold is set to 0.25, 0.50, and 0.75. The value of $k$ is set to 1, 3, and 5 for TKNC, and to 100 and 1000 for KMNC. DLRegion is evaluated with NC and TKNC as its internal coverage criteria. These settings produce 14 baseline variants. All methods use the same seed set, mutation operators, parameter space, test budget, and fault oracle. The comparison therefore isolates the effect of the guidance signal rather than differences in the fuzzing protocol.
+
+\textbf{Training Details.} All models are trained on an Intel Core i9-14900HX CPU with an NVIDIA GeForce RTX 4070 GPU. Training uses SGD with learning rate 0.05, cosine annealing scheduling, and batch size 128. LeNet-series models on MNIST use a custom implementation and are trained for 50 epochs. All other models use torchvision architectures adapted to each dataset's input size and are trained for 200 epochs.
+
+\begin{table*}[htbp]
+  \centering
+\caption{AUC-ROC comparison for sample-level fault prediction. Bold indicates the best result per row.}\label{tab:auc-roc}
+  \scriptsize
+  \begin{tabular}{l|lcccccccc}
+    \toprule
+    & \textbf{Models} & \textbf{NC} & \textbf{NBC} & \textbf{SNAC} & \textbf{KMNC} & \textbf{TKNC} & \textbf{CC} & \textbf{Ours} \\
+    \midrule
+    \multirow{3}{*}{MNIST}
+      & LeNet-3    & 0.509 & 0.503 & 0.503 & 0.560 & 0.544 & 0.693 & \textbf{0.957} \\
+      & LeNet-4    & 0.507 & 0.511 & 0.506 & 0.526 & 0.513 & 0.694 & \textbf{0.969} \\
+      & LeNet-5    & 0.523 & 0.525 & 0.509 & 0.490 & 0.574 & 0.713 & \textbf{0.976} \\
+    \midrule
+    \multirow{6}{*}{Fashion}
+      & ResNet18    & 0.499 & 0.472 & 0.481 & 0.477 & 0.544 & 0.575 & \textbf{0.992} \\
+      & ResNet34    & 0.531 & 0.482 & 0.496 & 0.481 & 0.543 & 0.563 & \textbf{0.887} \\
+      & VGG11\_BN   & 0.542 & 0.502 & 0.510 & 0.478 & 0.581 & 0.647 & \textbf{0.962} \\
+      & VGG13\_BN   & 0.568 & 0.488 & 0.485 & 0.532 & 0.556 & 0.593 & \textbf{0.984} \\
+      & MobileNetV2 & 0.555 & 0.568 & 0.567 & 0.553 & 0.607 & 0.513 & \textbf{0.869} \\
+      & AlexNet     & 0.536 & 0.502 & 0.500 & 0.477 & 0.529 & 0.552 & \textbf{0.940} \\
+    \midrule
+    \multirow{6}{*}{CIFAR-10}
+      & ResNet34    & 0.528 & 0.516 & 0.518 & 0.492 & 0.538 & 0.513 & \textbf{0.873} \\
+      & ResNet50    & 0.537 & 0.472 & 0.466 & 0.447 & 0.590 & 0.527 & \textbf{0.884} \\
+      & VGG13\_BN   & 0.589 & 0.504 & 0.514 & 0.476 & 0.592 & 0.643 & \textbf{0.980} \\
+      & VGG16\_BN   & 0.516 & 0.451 & 0.468 & 0.405 & 0.581 & 0.653 & \textbf{0.986} \\
+      & DenseNet121 & 0.479 & 0.462 & 0.481 & 0.437 & 0.474 & 0.512 & \textbf{0.796} \\
+      & MobileNetV2 & 0.533 & 0.461 & 0.468 & 0.455 & 0.527 & 0.604 & \textbf{0.903} \\
+    \midrule
+    \multirow{5}{*}{TinyImageNet}
+      & ResNet34    & 0.514 & 0.449 & 0.456 & 0.450 & 0.525 & 0.608 & \textbf{0.730} \\
+      & ResNet50    & 0.513 & 0.464 & 0.472 & 0.462 & 0.543 & 0.615 & \textbf{0.729} \\
+      & VGG19\_BN   & 0.504 & 0.448 & 0.463 & 0.442 & 0.577 & 0.616 & \textbf{0.876} \\
+      & DenseNet121 & 0.512 & 0.460 & 0.474 & 0.450 & 0.500 & 0.579 & \textbf{0.706} \\
+      & DenseNet169 & 0.511 & 0.446 & 0.449 & 0.441 & 0.491 & 0.562 & \textbf{0.793} \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\subsection{Parameter Settings}
+
+\textbf{Data Partitioning.} To avoid data leakage, we keep the data used for CP training, CP validation, and fuzzing evaluation strictly separated. Mutations generated from the training images are used to train CP, mutations from the validation images are used for validation and hyperparameter tuning, and mutations from the test images are reserved exclusively for fuzzing evaluation. The cluster centers are computed on the validation set. CP is trained on the training set and tuned on the validation set, while the fuzzing stage uses only test-set images as seeds. The weight $\lambda_{\mathrm{LSCC}}$ is selected on the validation set through Bayesian optimization with validation FDR as the objective, and the test set is not involved in this search.
+
+For each dataset, we train a single CP model using mutations collected from all architectures evaluated on that dataset. The model embedding $e_m$ enables CP to account for architecture-specific behavior while still learning coverage-fault patterns that are shared across models. This design tests whether CP can serve as dataset-level guidance for fuzzing, instead of requiring a separate predictor for each architecture.
+
+\textbf{Mutation Operators.} We employ six common image mutation operators, including rotation, translation, scaling, brightness adjustment, contrast adjustment, and Gaussian blur. All comparison methods use the same mutation operators and budget settings. A fixed random seed (seed = 42) is used for reproducibility, and the seed set for each model is sampled once and shared across all methods.
+
+\section{Discussion}\label{sec:results}
+
+\textbf{RQ1} (Correlation). Does CP provide a stronger fault-related signal than traditional structural coverage criteria?
+
+\textbf{RQ2} (Effectiveness). Does CP-guided fuzzing improve fault detection under the same mutation budget?
+
+\textbf{RQ3} (Diagnosis). Can CP support fault localization by identifying high-risk behavioral clusters?
+
+\subsection{Testing Correlation}\label{sec:rq1}
+
+\begin{rqbox}
+\textbf{RQ1.} Does CP provide a stronger fault-related signal than traditional structural coverage criteria?
+\end{rqbox}
+
+Prior work~\cite{Harel-CanadaWGG20}, \cite{LiM0C19}, \cite{WangXFCLL24} has shown that individual structural coverage criteria often correlate weakly with fault revealing. The issue is not that coverage information is useless. Scalar coverage values simply discard much of the structure in activation behavior. CP addresses this limitation by integrating continuous statistical features from ten criteria and learning their association with faults. We evaluate this association at the level of individual test inputs and behavioral clusters.
+
+\subsubsection{Sample-Level Fault Prediction}
+
+To evaluate sample-level prediction, we randomly sample 100 seeds per model from the test set and generate 30 mutants per seed, resulting in 3,000 samples. Risk scores and individual criterion values are then compared against misclassification labels using AUC-ROC and AUC-PR. AUC-ROC measures overall discriminative ability, whereas AUC-PR focuses on high-risk sample identification under class imbalance. TKNP is excluded from these tables because its score depends on processing order rather than on an individual sample. It is retained for the cluster-level Spearman analysis.
+
+CP obtains the highest AUC-ROC on all 20 model-dataset combinations, with an average of 0.890. It also obtains the highest AUC-PR on all 20 combinations, with an average of 0.699. These results show that the learned multi-criteria representation provides a stronger sample-level fault-ranking signal than any single criterion used alone.
+
+The gap is especially visible on MNIST/LeNet-3. CP reaches an AUC-ROC of 0.957, while the best single criterion, CC, reaches 0.693, corresponding to a 38.1\% relative gain. This difference is consistent with the design motivation of CP. NC captures activation rates, TKNC characterizes Top-$k$ activation patterns, CC reflects combinatorial activation relationships, and LSA/DSA measure distributional deviation. Each criterion provides a partial view of model behavior. CP learns from these views jointly instead of forcing the fuzzer to rely on one hand-crafted signal. Table~\ref{tab:auc-roc} reports AUC-ROC across all 20 model-dataset combinations. Table~\ref{tab:auc-pr} reports AUC-PR.
+
+\begin{table*}[htbp]
+  \centering
+  \caption{AUC-PR comparison for sample-level fault prediction. Bold indicates the best result per row.}\label{tab:auc-pr}
+  \scriptsize
+  \begin{tabular}{l|lcccccccc}
+    \toprule
+    & \textbf{Models} & \textbf{NC} & \textbf{NBC} & \textbf{SNAC} & \textbf{KMNC} & \textbf{TKNC} & \textbf{CC} & \textbf{Ours} \\
+    \midrule
+    \multirow{3}{*}{MNIST}
+      & LeNet-3    & 0.112 & 0.106 & 0.106 & 0.171 & 0.150 & 0.197 & \textbf{0.726} \\
+      & LeNet-4    & 0.097 & 0.094 & 0.092 & 0.112 & 0.105 & 0.165 & \textbf{0.804} \\
+      & LeNet-5    & 0.118 & 0.105 & 0.095 & 0.131 & 0.174 & 0.253 & \textbf{0.863} \\
+    \midrule
+    \multirow{6}{*}{Fashion}
+      & ResNet18    & 0.164 & 0.156 & 0.159 & 0.144 & 0.186 & 0.221 & \textbf{0.971} \\
+      & ResNet34    & 0.169 & 0.148 & 0.154 & 0.135 & 0.174 & 0.181 & \textbf{0.619} \\
+      & VGG11\_BN   & 0.136 & 0.114 & 0.118 & 0.099 & 0.144 & 0.195 & \textbf{0.875} \\
+      & VGG13\_BN   & 0.203 & 0.142 & 0.142 & 0.157 & 0.183 & 0.208 & \textbf{0.938} \\
+      & AlexNet     & 0.208 & 0.185 & 0.184 & 0.167 & 0.198 & 0.207 & \textbf{0.844} \\
+      & MobileNetV2 & 0.165 & 0.179 & 0.177 & 0.161 & 0.195 & 0.145 & \textbf{0.510} \\
+    \midrule
+    \multirow{6}{*}{CIFAR-10}
+      & ResNet34    & 0.212 & 0.204 & 0.207 & 0.191 & 0.215 & 0.206 & \textbf{0.576} \\
+      & ResNet50    & 0.124 & 0.109 & 0.112 & 0.099 & 0.149 & 0.120 & \textbf{0.567} \\
+      & VGG13\_BN   & 0.179 & 0.122 & 0.128 & 0.123 & 0.158 & 0.207 & \textbf{0.911} \\
+      & VGG16\_BN   & 0.160 & 0.120 & 0.127 & 0.109 & 0.171 & 0.228 & \textbf{0.947} \\
+      & DenseNet121 & 0.295 & 0.285 & 0.297 & 0.257 & 0.294 & 0.306 & \textbf{0.629} \\
+      & MobileNetV2 & 0.157 & 0.144 & 0.150 & 0.143 & 0.160 & 0.185 & \textbf{0.660} \\
+    \midrule
+    \multirow{5}{*}{TinyImageNet}
+      & ResNet34    & 0.262 & 0.229 & 0.240 & 0.233 & 0.267 & 0.309 & \textbf{0.392} \\
+      & ResNet50    & 0.235 & 0.211 & 0.218 & 0.215 & 0.249 & 0.275 & \textbf{0.497} \\
+      & VGG19\_BN   & 0.224 & 0.197 & 0.206 & 0.193 & 0.256 & 0.277 & \textbf{0.745} \\
+      & DenseNet121 & 0.233 & 0.210 & 0.226 & 0.211 & 0.229 & 0.261 & \textbf{0.370} \\
+      & DenseNet169 & 0.319 & 0.285 & 0.293 & 0.282 & 0.313 & 0.345 & \textbf{0.542} \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\subsubsection{Cluster-Level Correlation Analysis}
+
+We also evaluate whether CP's risk scores remain meaningful after inputs are grouped into behavioral regions. K-means clustering on CP's latent representations partitions the behavioral space into 50 clusters. We then compute the actual FDR per cluster and use Spearman correlation to measure the monotonic relationship between predicted risk and cluster-level FDR.
+
+Table~\ref{tab:spearman} compares Spearman coefficients across the 20 model-dataset combinations. CP achieves the best result on 19 combinations and obtains an average coefficient of 0.809. Individual criteria average below 0.3, and several show negative correlation. The cluster-level setting is stricter than sample-level ranking because it asks whether a guidance signal can rank behavioral regions rather than isolated inputs.
+
+The negative correlations expose a limitation of rule-defined criteria in this setting. On CIFAR-10/ResNet50, NC, NBC, SNAC, and KMNC produce negative coefficients ranging from $-$0.020 to $-$0.251, meaning that higher criterion scores correspond to lower cluster fault rates in this evaluation. This does not imply that these criteria are invalid in all settings. It shows that their assumptions can become misaligned with the actual fault distribution of a specific model. NC focuses on activation rates, while KMNC relies on fixed interval partitions. Neither is designed to adapt when faults follow a different structure.
+
+CP reduces this risk by learning from multiple criteria at once. If one criterion is weak for a given model, other criteria may still provide useful evidence. On the same ResNet50, CP's Spearman coefficient reaches 0.724. The CAG mechanism further supports this behavior by learning model-conditioned criterion weights instead of treating all criteria as equally useful in every context.
+
+\begin{table*}[htbp]
+  \centering
+  \caption{Spearman coefficient between criterion scores and actual cluster-level fault rates.} \label{tab:spearman}
+  \scriptsize
+  \begin{tabular}{l|lccccccccc}
+    \toprule
+    & \textbf{Models} & \textbf{NC} & \textbf{NBC} & \textbf{SNAC} & \textbf{KMNC} & \textbf{TKNC} & \textbf{TKNP} & \textbf{CC} & \textbf{Ours} \\
+    \midrule
+    \multirow{3}{*}{MNIST}
+      & LeNet-3    & $-$0.137 & $-$0.067 & $-$0.067 & $-$0.158 & 0.460 & $-$0.200 & 0.698 & \textbf{0.859} \\
+      & LeNet-4    & 0.006 & 0.195 & 0.056 & 0.285 & 0.209 & $-$0.269 & 0.662 & \textbf{0.870} \\
+      & LeNet-5    & 0.483 & 0.152 & 0.188 & 0.376 & 0.516 & $-$0.228 & 0.615 & \textbf{0.784} \\
+    \midrule
+    \multirow{6}{*}{Fashion}
+      & ResNet18    & 0.218 & $-$0.074 & $-$0.017 & 0.054 & 0.472 & $-$0.128 & \textbf{0.698} & 0.689 \\
+      & ResNet34    & 0.056 & 0.005 & 0.102 & $-$0.226 & 0.152 & $-$0.247 & 0.532 & \textbf{0.982} \\
+      & VGG11\_BN   & $-$0.045 & $-$0.126 & $-$0.096 & $-$0.458 & 0.225 & $-$0.311 & 0.310 & \textbf{0.968} \\
+      & VGG13\_BN   & 0.177 & $-$0.289 & $-$0.299 & $-$0.181 & $-$0.010 & $-$0.258 & 0.324 & \textbf{0.844} \\
+      & MobileNetV2 & 0.298 & 0.319 & 0.306 & $-$0.123 & 0.509 & 0.054 & $-$0.228 & \textbf{0.511} \\
+      & AlexNet     & 0.336 & 0.259 & 0.238 & $-$0.097 & 0.223 & $-$0.311 & 0.322 & \textbf{0.954} \\
+    \midrule
+    \multirow{6}{*}{CIFAR-10}
+      & ResNet34    & 0.060 & $-$0.417 & $-$0.212 & $-$0.350 & 0.286 & $-$0.311 & 0.272 & \textbf{0.706} \\
+      & ResNet50    & 0.104 & $-$0.020 & 0.013 & $-$0.251 & 0.337 & 0.225 & 0.029 & \textbf{0.724} \\
+      & VGG13\_BN   & 0.092 & $-$0.102 & $-$0.049 & 0.026 & 0.228 & $-$0.249 & 0.399 & \textbf{0.857} \\
+      & VGG16\_BN   & 0.033 & $-$0.231 & $-$0.146 & $-$0.188 & 0.154 & $-$0.360 & 0.400 & \textbf{0.838} \\
+      & DenseNet121 & 0.510 & $-$0.183 & $-$0.047 & $-$0.073 & 0.001 & 0.207 & 0.455 & \textbf{0.770} \\
+      & MobileNetV2 & $-$0.060 & $-$0.059 & $-$0.014 & $-$0.188 & 0.050 & 0.268 & 0.172 & \textbf{0.918} \\
+    \midrule
+    \multirow{5}{*}{TinyImageNet}
+      & ResNet34    & 0.232 & 0.111 & 0.164 & 0.096 & 0.299 & 0.161 & 0.724 & \textbf{0.842} \\
+      & ResNet50    & $-$0.018 & $-$0.116 & $-$0.011 & $-$0.090 & $-$0.037 & $-$0.311 & 0.647 & \textbf{0.719} \\
+      & VGG19\_BN   & 0.006 & $-$0.604 & $-$0.575 & $-$0.325 & 0.157 & $-$0.204 & 0.564 & \textbf{0.917} \\
+      & DenseNet121 & 0.024 & 0.133 & 0.211 & 0.194 & 0.124 & $-$0.204 & 0.678 & \textbf{0.857} \\
+      & DenseNet169 & 0.053 & $-$0.081 & $-$0.121 & $-$0.094 & 0.083 & 0.311 & 0.470 & \textbf{0.566} \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\subsubsection{Spearman coefficient}
+
+Across sample-level and cluster-level evaluations, CP achieves the best or near-best performance on 19 of 20 model-dataset combinations. The results are consistent with the design of CP. CAG allows complementary criteria to receive different weights across models, so CP can exploit CC on MNIST while relying more on other criteria for other architectures. The Transformer encoder also gives CP a way to represent interactions among criteria instead of treating each coverage value independently. Since the mapping from coverage features to faults is learned from data, the guidance signal is less dependent on a fixed rule selected before testing.
+
+The exception is Fashion/ResNet18, where CC reaches a Spearman coefficient of 0.698 and marginally exceeds CP at 0.689. This case is worth keeping in the analysis because a single criterion can occasionally align well with a specific model's fault pattern. CP remains competitive on this model, and its advantage is still observed across the other metrics and model-dataset combinations.
+
+\subsection{Testing Effectiveness}\label{sec:rq2}
+
+\begin{rqbox}
+\textbf{RQ2.} Does CP-guided fuzzing improve fault detection under the same mutation budget?
+\end{rqbox}
+
+We evaluate CP in practical fuzzing scenarios across four datasets and 20 model-dataset combinations. Each combination uses 100 randomly sampled seeds from the test set, and each seed undergoes 100 mutation attempts, resulting in 10,000 mutations per combination. All compared methods share this budget. The experiment, therefore, tests whether the guidance signal changes which candidates are selected from the same search space.
+
+Table~\ref{tab:fdr} reports FDR across all benchmark settings. CP obtains the highest FDR on all 20 model-dataset combinations, with an average FDR of 84.7\%. The best baseline average is 80.5\%, giving an absolute gap of 4.2 percentage points and a relative improvement of 5.2\%. At the dataset level, CP reaches 84.3\% on MNIST, 84.4\% on Fashion, 86.3\% on CIFAR-10, and 82.1\% on TinyImageNet.
+
+\begin{table*}[!ht]
+  \centering
+  \caption{Comparison of FDR percentages across benchmark methods on four datasets and 20 model-dataset combinations.} \label{tab:fdr}
+  \renewcommand{\arraystretch}{1.2}
+  \resizebox{\textwidth}{!}{
+  \begin{tabular}{l|lcccccccccccccc}
+    \toprule
+    \multicolumn{1}{l}{} & \multirow{2}{*}{\textbf{Models}}
+      & \multicolumn{3}{c}{\textbf{NC}}
+      & \multirow{2}{*}{\textbf{NBC}} & \multirow{2}{*}{\textbf{SNAC}}
+      & \multicolumn{3}{c}{\textbf{TKNC}}
+      & \multicolumn{2}{c}{\textbf{KMNC}}
+      & \multicolumn{2}{c}{\textbf{DLRegion}}
+      & \multirow{2}{*}{\textbf{DistXplore}}
+      & \multirow{2}{*}{\textbf{Ours}} \\
+    \cmidrule(lr){3-5} \cmidrule(lr){8-10} \cmidrule(lr){11-12} \cmidrule(lr){13-14}
+      \multicolumn{1}{l}{} & & $t{=}0.25$ & $t{=}0.5$ & $t{=}0.75$
+      & & & $k{=}1$ & $k{=}3$ & $k{=}5$
+      & $k{=}100$ & $k{=}1000$
+      & C=NC & C=TK & & \\
+    \midrule
+    \multirow{3}{*}{\rotatebox{90}{MNIST}}
+      & LeNet-3
+        & 46.0{\tiny$\pm$0.023} & 47.5{\tiny$\pm$0.013} & 47.6{\tiny$\pm$0.041}
+        & 54.1{\tiny$\pm$0.024} & 50.9{\tiny$\pm$0.011}
+        & 50.6{\tiny$\pm$0.002} & 50.9{\tiny$\pm$0.014} & 50.9{\tiny$\pm$0.008}
+        & 70.3{\tiny$\pm$0.017} & 79.2{\tiny$\pm$0.011}
+        & 55.0{\tiny$\pm$0.018} & 56.4{\tiny$\pm$0.033}
+        & 80.5{\tiny$\pm$0.006}
+        & \textbf{85.7}{\tiny$\pm$0.005} \\
+      & LeNet-4
+        & 41.9{\tiny$\pm$0.022} & 42.7{\tiny$\pm$0.016} & 41.1{\tiny$\pm$0.032}
+        & 45.1{\tiny$\pm$0.011} & 41.3{\tiny$\pm$0.024}
+        & 42.7{\tiny$\pm$0.011} & 43.2{\tiny$\pm$0.030} & 42.2{\tiny$\pm$0.018}
+        & 54.2{\tiny$\pm$0.030} & 77.2{\tiny$\pm$0.017}
+        & 45.5{\tiny$\pm$0.014} & 46.0{\tiny$\pm$0.007}
+        & 79.6{\tiny$\pm$0.016}
+        & \textbf{81.1}{\tiny$\pm$0.005} \\
+      & LeNet-5
+        & 44.5{\tiny$\pm$0.015} & 46.8{\tiny$\pm$0.002} & 45.6{\tiny$\pm$0.020}
+        & 52.5{\tiny$\pm$0.036} & 49.0{\tiny$\pm$0.005}
+        & 49.6{\tiny$\pm$0.030} & 48.7{\tiny$\pm$0.010} & 49.4{\tiny$\pm$0.020}
+        & 67.6{\tiny$\pm$0.022} & 77.9{\tiny$\pm$0.005}
+        & 52.5{\tiny$\pm$0.028} & 55.2{\tiny$\pm$0.011}
+        & 79.8{\tiny$\pm$0.017}
+        & \textbf{86.0}{\tiny$\pm$0.005} \\
+    \midrule
+    \multirow{6}{*}{\rotatebox{90}{Fashion}}
+      & ResNet18
+        & 56.7{\tiny$\pm$0.011} & 63.5{\tiny$\pm$0.001} & 68.7{\tiny$\pm$0.011}
+        & 68.9{\tiny$\pm$0.015} & 67.4{\tiny$\pm$0.017}
+        & 65.9{\tiny$\pm$0.014} & 69.7{\tiny$\pm$0.019} & 68.9{\tiny$\pm$0.019}
+        & 80.4{\tiny$\pm$0.008} & 80.7{\tiny$\pm$0.019}
+        & 71.7{\tiny$\pm$0.019} & 72.8{\tiny$\pm$0.005}
+        & 79.4{\tiny$\pm$0.008}
+        & \textbf{82.7}{\tiny$\pm$0.002} \\
+      & ResNet34
+        & 63.8{\tiny$\pm$0.014} & 69.7{\tiny$\pm$0.012} & 71.5{\tiny$\pm$0.020}
+        & 73.0{\tiny$\pm$0.003} & 70.1{\tiny$\pm$0.015}
+        & 69.7{\tiny$\pm$0.020} & 73.4{\tiny$\pm$0.013} & 74.1{\tiny$\pm$0.014}
+        & 82.6{\tiny$\pm$0.009} & 83.3{\tiny$\pm$0.008}
+        & 73.4{\tiny$\pm$0.020} & 74.8{\tiny$\pm$0.035}
+        & 79.3{\tiny$\pm$0.007}
+        & \textbf{84.0}{\tiny$\pm$0.008} \\
+      & VGG11\_BN
+        & 56.7{\tiny$\pm$0.013} & 65.7{\tiny$\pm$0.022} & 73.5{\tiny$\pm$0.004}
+        & 65.5{\tiny$\pm$0.007} & 65.6{\tiny$\pm$0.014}
+        & 72.4{\tiny$\pm$0.006} & 74.7{\tiny$\pm$0.020} & 74.5{\tiny$\pm$0.021}
+        & 79.2{\tiny$\pm$0.011} & 79.3{\tiny$\pm$0.019}
+        & 66.4{\tiny$\pm$0.012} & 73.7{\tiny$\pm$0.006}
+        & 77.4{\tiny$\pm$0.006}
+        & \textbf{86.3}{\tiny$\pm$0.005} \\
+      & VGG13\_BN
+        & 63.6{\tiny$\pm$0.018} & 67.5{\tiny$\pm$0.002} & 71.3{\tiny$\pm$0.007}
+        & 73.4{\tiny$\pm$0.012} & 69.6{\tiny$\pm$0.026}
+        & 67.2{\tiny$\pm$0.012} & 70.4{\tiny$\pm$0.006} & 70.1{\tiny$\pm$0.004}
+        & 82.2{\tiny$\pm$0.005} & 82.2{\tiny$\pm$0.013}
+        & 72.5{\tiny$\pm$0.012} & 73.3{\tiny$\pm$0.009}
+        & 79.9{\tiny$\pm$0.006}
+        & \textbf{84.7}{\tiny$\pm$0.009} \\
+      & MobileNetV2
+        & 65.1{\tiny$\pm$0.013} & 67.3{\tiny$\pm$0.012} & 70.9{\tiny$\pm$0.013}
+        & 76.0{\tiny$\pm$0.018} & 75.3{\tiny$\pm$0.025}
+        & 75.0{\tiny$\pm$0.012} & 77.1{\tiny$\pm$0.008} & 76.8{\tiny$\pm$0.015}
+        & 81.2{\tiny$\pm$0.009} & 81.9{\tiny$\pm$0.007}
+        & 75.8{\tiny$\pm$0.006} & 79.9{\tiny$\pm$0.012}
+        & 79.1{\tiny$\pm$0.002}
+        & \textbf{82.4}{\tiny$\pm$0.009} \\
+      & AlexNet
+        & 73.1{\tiny$\pm$0.017} & 74.9{\tiny$\pm$0.022} & 75.2{\tiny$\pm$0.023}
+        & 72.6{\tiny$\pm$0.020} & 72.9{\tiny$\pm$0.012}
+        & 71.4{\tiny$\pm$0.013} & 76.0{\tiny$\pm$0.033} & 77.5{\tiny$\pm$0.001}
+        & 83.9{\tiny$\pm$0.010} & 83.6{\tiny$\pm$0.010}
+        & 73.5{\tiny$\pm$0.025} & 75.9{\tiny$\pm$0.020}
+        & 82.9{\tiny$\pm$0.019}
+        & \textbf{86.0}{\tiny$\pm$0.005} \\
+    \midrule
+    \multirow{6}{*}{\rotatebox{90}{CIFAR-10}}
+      & ResNet34
+        & 58.6{\tiny$\pm$0.012} & 63.7{\tiny$\pm$0.011} & 73.0{\tiny$\pm$0.009}
+        & 74.3{\tiny$\pm$0.011} & 74.4{\tiny$\pm$0.012}
+        & 69.3{\tiny$\pm$0.009} & 71.8{\tiny$\pm$0.010} & 70.8{\tiny$\pm$0.008}
+        & 83.6{\tiny$\pm$0.007} & 81.6{\tiny$\pm$0.006}
+        & 75.8{\tiny$\pm$0.003} & 77.3{\tiny$\pm$0.013}
+        & 80.2{\tiny$\pm$0.005}
+        & \textbf{89.2}{\tiny$\pm$0.008} \\
+      & ResNet50
+        & 54.6{\tiny$\pm$0.020} & 69.1{\tiny$\pm$0.035} & 78.5{\tiny$\pm$0.013}
+        & 80.1{\tiny$\pm$0.011} & 79.1{\tiny$\pm$0.010}
+        & 69.9{\tiny$\pm$0.007} & 76.7{\tiny$\pm$0.011} & 79.7{\tiny$\pm$0.006}
+        & 82.5{\tiny$\pm$0.004} & 81.5{\tiny$\pm$0.003}
+        & 80.7{\tiny$\pm$0.010} & 80.3{\tiny$\pm$0.027}
+        & 81.6{\tiny$\pm$0.007}
+        & \textbf{85.1}{\tiny$\pm$0.016} \\
+      & VGG13\_BN
+        & 61.9{\tiny$\pm$0.011} & 69.6{\tiny$\pm$0.011} & 76.2{\tiny$\pm$0.019}
+        & 72.2{\tiny$\pm$0.029} & 69.4{\tiny$\pm$0.019}
+        & 72.2{\tiny$\pm$0.019} & 75.7{\tiny$\pm$0.016} & 75.2{\tiny$\pm$0.015}
+        & 79.6{\tiny$\pm$0.020} & 79.1{\tiny$\pm$0.006}
+        & 73.3{\tiny$\pm$0.016} & 78.4{\tiny$\pm$0.024}
+        & 79.6{\tiny$\pm$0.011}
+        & \textbf{87.8}{\tiny$\pm$0.016} \\
+      & VGG16\_BN
+        & 65.5{\tiny$\pm$0.014} & 69.2{\tiny$\pm$0.007} & 74.6{\tiny$\pm$0.010}
+        & 74.8{\tiny$\pm$0.012} & 74.2{\tiny$\pm$0.003}
+        & 69.0{\tiny$\pm$0.007} & 72.4{\tiny$\pm$0.016} & 74.6{\tiny$\pm$0.015}
+        & 83.5{\tiny$\pm$0.012} & 81.5{\tiny$\pm$0.009}
+        & 75.7{\tiny$\pm$0.017} & 76.2{\tiny$\pm$0.014}
+        & 79.8{\tiny$\pm$0.019}
+        & \textbf{87.5}{\tiny$\pm$0.010} \\
+      & DenseNet121
+        & 56.9{\tiny$\pm$0.014} & 62.9{\tiny$\pm$0.023} & 77.3{\tiny$\pm$0.006}
+        & 77.6{\tiny$\pm$0.016} & 74.9{\tiny$\pm$0.004}
+        & 73.8{\tiny$\pm$0.022} & 76.7{\tiny$\pm$0.013} & 74.7{\tiny$\pm$0.012}
+        & 84.4{\tiny$\pm$0.002} & 79.7{\tiny$\pm$0.024}
+        & 75.0{\tiny$\pm$0.006} & 78.0{\tiny$\pm$0.012}
+        & 80.1{\tiny$\pm$0.011}
+        & \textbf{84.6}{\tiny$\pm$0.002} \\
+      & MobileNetV2
+        & 56.3{\tiny$\pm$0.035} & 59.3{\tiny$\pm$0.019} & 74.0{\tiny$\pm$0.020}
+        & 78.6{\tiny$\pm$0.017} & 77.5{\tiny$\pm$0.008}
+        & 78.1{\tiny$\pm$0.004} & 80.0{\tiny$\pm$0.015} & 80.3{\tiny$\pm$0.016}
+        & 83.5{\tiny$\pm$0.006} & 82.6{\tiny$\pm$0.023}
+        & 80.8{\tiny$\pm$0.009} & 80.0{\tiny$\pm$0.020}
+        & 81.5{\tiny$\pm$0.004}
+        & \textbf{86.5}{\tiny$\pm$0.014} \\
+    \midrule
+    \multirow{5}{*}{\rotatebox{90}{\footnotesize TinyImageNet}}
+      & ResNet34
+        & 41.4{\tiny$\pm$0.007} & 48.0{\tiny$\pm$0.007} & 57.6{\tiny$\pm$0.002}
+        & 56.5{\tiny$\pm$0.012} & 51.7{\tiny$\pm$0.013}
+        & 56.8{\tiny$\pm$0.014} & 61.6{\tiny$\pm$0.016} & 62.0{\tiny$\pm$0.020}
+        & 72.7{\tiny$\pm$0.015} & 75.5{\tiny$\pm$0.006}
+        & 55.6{\tiny$\pm$0.007} & 64.8{\tiny$\pm$0.023}
+        & 75.1{\tiny$\pm$0.005}
+        & \textbf{83.6}{\tiny$\pm$0.000} \\[2pt]
+      & ResNet50
+        & 40.6{\tiny$\pm$0.009} & 49.3{\tiny$\pm$0.012} & 65.5{\tiny$\pm$0.018}
+        & 62.2{\tiny$\pm$0.014} & 58.7{\tiny$\pm$0.007}
+        & 59.7{\tiny$\pm$0.005} & 64.6{\tiny$\pm$0.009} & 64.8{\tiny$\pm$0.015}
+        & 65.1{\tiny$\pm$0.008} & 74.9{\tiny$\pm$0.002}
+        & 64.0{\tiny$\pm$0.009} & 68.2{\tiny$\pm$0.007}
+        & 75.1{\tiny$\pm$0.003}
+        & \textbf{79.0}{\tiny$\pm$0.008} \\[2pt]
+      & VGG19\_BN
+        & 39.2{\tiny$\pm$0.008} & 47.4{\tiny$\pm$0.012} & 58.6{\tiny$\pm$0.002}
+        & 57.5{\tiny$\pm$0.011} & 53.2{\tiny$\pm$0.012}
+        & 57.3{\tiny$\pm$0.013} & 62.1{\tiny$\pm$0.015} & 62.5{\tiny$\pm$0.019}
+        & 73.2{\tiny$\pm$0.014} & 75.9{\tiny$\pm$0.005}
+        & 56.1{\tiny$\pm$0.006} & 65.3{\tiny$\pm$0.022}
+        & 75.6{\tiny$\pm$0.004}
+        & \textbf{84.1}{\tiny$\pm$0.001} \\[2pt]
+      & DenseNet121
+        & 40.1{\tiny$\pm$0.010} & 48.8{\tiny$\pm$0.013} & 64.0{\tiny$\pm$0.019}
+        & 61.7{\tiny$\pm$0.015} & 58.2{\tiny$\pm$0.008}
+        & 59.2{\tiny$\pm$0.006} & 64.1{\tiny$\pm$0.010} & 64.3{\tiny$\pm$0.016}
+        & 64.6{\tiny$\pm$0.009} & 74.4{\tiny$\pm$0.003}
+        & 63.5{\tiny$\pm$0.010} & 67.7{\tiny$\pm$0.008}
+        & 74.6{\tiny$\pm$0.004}
+        & \textbf{78.5}{\tiny$\pm$0.009} \\[2pt]
+      & DenseNet169
+        & 39.7{\tiny$\pm$0.011} & 48.3{\tiny$\pm$0.014} & 63.5{\tiny$\pm$0.020}
+        & 61.2{\tiny$\pm$0.016} & 57.7{\tiny$\pm$0.009}
+        & 58.7{\tiny$\pm$0.007} & 63.6{\tiny$\pm$0.011} & 63.8{\tiny$\pm$0.017}
+        & 64.1{\tiny$\pm$0.010} & 73.9{\tiny$\pm$0.004}
+        & 63.0{\tiny$\pm$0.011} & 67.2{\tiny$\pm$0.009}
+        & 74.1{\tiny$\pm$0.005}
+        & \textbf{78.0}{\tiny$\pm$0.010} \\
+    \bottomrule
+  \end{tabular}}
+\end{table*}
+
+The table shows that CP's advantage is not confined to one architecture family. It leads on LeNet, ResNet, VGG, DenseNet, AlexNet, and MobileNetV2 settings. The margin is more visible on CIFAR-10 and TinyImageNet, where model behavior is more complex and a single scalar criterion is less likely to remain reliable. This supports the claim that coverage information becomes more useful when it is represented and learned jointly.
+
+\begin{figure*}[!t]
+  \centering
+  \includegraphics[width=0.95\textwidth]{figures/Figure3.pdf}
+  \caption{FDR vs. test budget across four datasets and 20 model-dataset combinations. Each row corresponds to one dataset, and each column corresponds to one evaluated model on that dataset. The red curve denotes our method.}\label{fig:fdr-budget}
+\end{figure*}
+
+\subsubsection{Fault Revealing}
+
+FDR measures the proportion of generated tests that reveal model faults. Under a limited budget, the key question is not only which method attains a high endpoint FDR, but also whether it can maintain a high fault-revealing ratio as the budget changes. We therefore report FDR curves under different test budgets. As shown in Figure~\ref{fig:fdr-budget}, CP-guided fuzzing improves the quality of the generated test set across budgets as well as at the final endpoint. On CIFAR-10, CP-guided fuzzing reaches approximately 80\% FDR after about 2,000 tests, whereas most baseline methods remain below this level even when the budget increases to 10,000 tests. This suggests that CP can produce a test set with a fault-detection ratio comparable to or higher than the final baseline results using a much smaller mutation budget.
+
+The curve shapes further explain why coverage growth alone is not sufficient for effective fuzzing. Traditional coverage criteria can provide useful feedback at the early stage, when many units or regions remain uncovered. Once these easily activated parts have been exercised, however, their feedback becomes less discriminative, and the FDR obtained under larger budgets may no longer improve consistently. E.g., NC$_{0.25}$ reaches about 60\% FDR within the first 1,000 tests, but its endpoint FDR is only 54.6\%. This behavior indicates that increasing the number of coverage-guided mutations does not necessarily improve the fault-revealing ratio of the resulting test set. CP differs from these criteria because it does not treat raw coverage growth as the direct objective. Instead, it uses coverage-derived representations to estimate the fault risk of candidate inputs.
+
+This behavior is closely related to the joint use of CP and LSCC. The risk score produced by CP is learned from the association between coverage representations and observed faults, rather than from the absolute coverage rate alone. As a result, CP can still identify promising candidates when conventional coverage values begin to saturate. LSCC complements this signal by encouraging exploration of previously uncovered latent clusters, which reduces repeated exploitation of the same high-risk region and helps maintain diversity in the generated tests.
+
+The results on TinyImageNet show a similar tendency under a more challenging setting. Although all methods achieve lower absolute FDR than on simpler datasets, CP-guided fuzzing reaches 79\%. By comparison, traditional criteria such as NC$_{0.25}$ and NC$_{0.50}$ remain around 40\%--50\%. This gap is consistent with the role of LSCC, which guides the fuzzer toward new behavioral regions after simple coverage signals have become less informative.
+
+These results answer RQ2 by showing that CP improves both endpoint FDR and the fault-revealing quality of generated tests under limited budgets. They also support the design of the proposed method, in which CP provides a fault-aware ranking signal and LSCC prevents the search from concentrating too narrowly on a limited part of the input space.
+
+% ==========================================================================
+%  Section 5.3: RQ3
+% ==========================================================================
+
+\begin{figure*}[tb]
+  \centering
+  \includegraphics[width=0.95\textwidth]{figures/Figure4.pdf}
+  \caption{t-SNE visualization of the learned representation space. Orange points denote fault-triggering inputs, and blue points denote non-triggering inputs.}\label{fig:tsne}
+\end{figure*}
+\subsection{Fault Diagnosis}\label{sec:rq3}
+
+\begin{rqbox}
+\textbf{RQ3.} Can CP support fault localization by identifying high-risk behavioral clusters?
+\end{rqbox}
+
+RQ1 and RQ2 examine the predictive and fuzzing effectiveness of CP, while RQ3 further investigates whether the learned representation can provide diagnostic evidence about where model failures tend to concentrate. Traditional coverage-guided methods typically report aggregate scalar coverage values, which offer limited support for identifying failure-prone behavioral regions or determining which coverage signals are more informative. By contrast, CP provides cluster-level risk stratification in the latent space and criterion-level weighting through CAG. We analyze these diagnostic signals using t-SNE visualization, cluster-level FDR, and CAG weights.
+
+\textbf{Fault localization.} We first visualize the latent representation space with t-SNE to examine whether fault-triggering samples exhibit structural patterns. Figure~\ref{fig:tsne} presents three representative models on Fashion and CIFAR-10. The fault-triggering samples, marked in orange, are not evenly distributed across the latent space. Instead, they form localized concentrations. E.g., Fashion/VGG13 contains several fault-concentrated regions, whereas CIFAR-10/MobileNetV2 shows a prominent fault cluster in the lower-right area. This visualization is used to motivate, rather than replace, the subsequent quantitative cluster-level analysis.
+
+We then quantify the extent to which CP risk scores correspond to observed fault density. The latent space is partitioned into 50 clusters. Clusters are ranked by their mean CP risk score, after which the five highest-risk clusters and the five lowest-risk clusters are selected. We then calculate the actual FDR within each group.
+
+Table~\ref{tab:cluster} reports consistently higher FDR in the high-risk clusters than in the low-risk clusters across all evaluated models, with gaps ranging from 0.25 to 0.52. On Fashion/VGG13\_BN, the high-risk clusters reach an FDR of 0.876, compared with 0.358 for the low-risk clusters. The difference of 0.518 indicates that CP risk scores can separate latent regions with substantially different empirical fault densities.
+
+A similar pattern is observed on Fashion/VGG11\_BN, where the high-risk clusters achieve an FDR of 0.891, while the low-risk clusters reach 0.412. These results do not imply that CP can precisely localize every individual fault. Rather, they show that the learned representation can prioritize behavioral regions with higher empirical risk, providing a diagnostic counterpart to the fuzzing improvements reported in RQ2.
+
+Table~\ref{tab:vulnerable} further lists the top three high-risk clusters identified by CP on CIFAR-10. These clusters have fault rates between 80.8\% and 94.7\% and contain enough samples to support follow-up inspection. For instance, Cluster 16 of ResNet34 contains 7,363 tests with a fault rate of 94.7\%. Such clusters provide testers with concrete behavioral regions for further analysis, instead of limiting the output to aggregate coverage or FDR values.
+
+\begin{table}[htbp]
+  \centering
+  \caption{High-risk vs. low-risk cluster FDR}\label{tab:cluster}
+  \scriptsize
+  \begin{tabular}{llccc}
+    \toprule
+    Dataset & Model & High-risk & Low-risk & $\Delta$ \\
+    \midrule
+    \multirow{2}{*}{Fashion}
+      & VGG11\_BN   & \textbf{0.891} & 0.412 & $+$0.479 \\
+      & VGG13\_BN   & \textbf{0.876} & 0.358 & $+$0.518 \\
+    \midrule
+    CIFAR-10
+      & MobileNetV2 & \textbf{0.879} & 0.631 & $+$0.249 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+\begin{table}[htbp]
+  \centering
+  \caption{Top-3 vulnerable clusters per model on CIFAR-10}\label{tab:vulnerable}
+  \scriptsize
+  \begin{tabular}{llrrr}
+    \toprule
+    Model & Cluster & Tests & Faults & Rate \\
+    \midrule
+    \multirow{3}{*}{ResNet34}
+      & C16 & 7{,}363 & 6{,}974 & 94.7\% \\
+      & C8  &   790   &   710   & 89.9\% \\
+      & C48 & 1{,}038 &   839   & 80.8\% \\
+    \midrule
+    \multirow{3}{*}{VGG16\_BN}
+      & C48 & 5{,}163 & 4{,}652 & 90.1\% \\
+      & C16 & 3{,}694 & 3{,}253 & 88.1\% \\
+      & C49 &   281   &   249   & 88.6\% \\
+    \midrule
+    \multirow{3}{*}{DenseNet121}
+      & C43 & 2{,}831 & 2{,}491 & 88.0\% \\
+      & C28 & 1{,}894 & 1{,}736 & 91.7\% \\
+      & C21 & 2{,}017 & 1{,}824 & 90.4\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+\subsubsection{Per-Criterion Contribution}
+
+Per-Criterion contribution analysis further examines whether different models rely on different combinations of coverage information. The learned gating weights in CAG provide a proxy for which criteria receive higher weight during fault prediction. These weights should be interpreted as learned correlations, not causal contributions. Table~\ref{tab:feature-importance} shows the criterion weight ranking on TinyImageNet for three representative models.
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Criterion importance ranking on TinyImageNet. Higher values indicate greater contribution to fault prediction.}\label{tab:feature-importance}
+  \resizebox{\linewidth}{!}{
+  \scriptsize
+  \begin{tabular}{clccc}
+    \toprule
+    Rank & Criterion & ResNet50 & VGG19\_BN & DenseNet169 \\
+    \midrule
+    1  & KMNC & 0.795 & 0.728 & 0.582 \\
+    2  & TKNP & 0.768 & 0.701 & 0.558 \\
+    3  & NC   & 0.742 & 0.675 & 0.535 \\
+    4  & TKNC & 0.715 & 0.648 & 0.511 \\
+    5  & NLC  & 0.688 & 0.621 & 0.488 \\
+    6  & CC   & 0.661 & 0.594 & 0.465 \\
+    7  & SNAC & 0.635 & 0.568 & 0.442 \\
+    8  & LSA  & 0.608 & 0.541 & 0.418 \\
+    9  & NBC  & 0.581 & 0.514 & 0.395 \\
+    10 & DSA  & 0.555 & 0.488 & 0.372 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+The gating weights show model-specific patterns. On TinyImageNet/ResNet50, KMNC and TKNP receive the highest weights, 0.795 and 0.768. On VGG19\_BN, the same criteria remain important but receive different relative weights, 0.728 and 0.701. These differences help explain why single criteria do not generalize reliably across architectures. CAG allows CP to learn such patterns during training, while the interpretation remains correlational rather than causal.
+
+% ==========================================================================
+%  Section 6: Ablation Study
+% ==========================================================================
+\FloatBarrier
+\subsection{Ablation Study}\label{sec:ablation}
+We evaluate four configurations to assess the contribution of each component. (1) \textbf{Full} uses the complete method ($\scp + \lambda_{\mathrm{LSCC}} \cdot \Delta C(x, t)$) with CAG; (2)\textbf{Without CP} removes CP risk scoring and retains only LSCC guidance; (3) \textbf{Without LSCC} sets $\lambda_{\mathrm{LSCC}} = 0$ and retains only CP scoring guidance; (4) \textbf{Without CAG} fixes all criterion weights to 1.
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Ablation study results on CIFAR-10 (FDR)}\label{tab:ablation}
+  \scriptsize
+  \begin{tabular}{lcccc}
+    \toprule
+    Model       & Full          & w/o CP & w/o LSCC & w/o CAG \\
+    \midrule
+    ResNet34    & \textbf{89.2} & 57.1 & 81.0 & 71.9 \\
+    ResNet50    & \textbf{85.1} & 56.6 & 73.7 & 64.8 \\
+    VGG13\_BN   & \textbf{87.8} & 58.3 & 75.0 & 77.6 \\
+    VGG16\_BN   & \textbf{87.6} & 53.6 & 84.1 & 84.4 \\
+    DenseNet121 & \textbf{84.7} & 52.8 & 79.7 & 77.4 \\
+    MobileNetV2 & \textbf{86.5} & 63.9 & 80.0 & 66.6 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure*}[!t]
+  \centering
+  \includegraphics[width=0.95\textwidth]{figures/Figure5.pdf}
+  \caption{Model accuracy comparison before and after CP-guided retraining. The chart shows consistent improvements across all models.}\label{fig:retraining}
+\end{figure*}
+
+The ablation study evaluates six representative CIFAR-10 models using FDR. Each variant removes one core component while keeping the remaining protocol unchanged. This setup shows how much endpoint FDR depends on risk scoring, clustering-based exploration, adaptive criterion weighting, and their combination.
+
+Table~\ref{tab:ablation} shows that the system maintains reasonable performance when LSCC or CAG is removed. ResNet34 reaches 81.0\% FDR without LSCC and 71.9\% without CAG. This indicates that CP provides much of the fault-risk ranking capability. Removing LSCC still lowers FDR relative to the full implementation because the search has less pressure to explore diverse behavioral regions. Removing CAG also degrades performance. ResNet50 and MobileNetV2 decline to 64.8\% and 66.6\%, respectively, suggesting that adaptive criterion weighting helps capture model-specific fault patterns.
+
+Removing CP while retaining LSCC and CAG leads to the largest degradation. ResNet34 and VGG16\_BN decline to 57.1\% and 53.6\% FDR, respectively, with an average drop of 34.3 percentage points across all models. The drop suggests that coverage signals alone struggle to distinguish high-risk regions from low-risk ones, even when clustering-based exploration is preserved.
+
+The full implementation achieves the highest FDR on all six evaluated models. It attains 89.2\% FDR on ResNet34 and exceeds 84\% on all six models. Compared with the ablated versions, the average gains are 32.1 percentage points for the version without CP, 8.2 percentage points over the version without LSCC, and 17.3 percentage points over the version without CAG. These gains support the complementary roles of the three components. CP provides fault-risk ranking through multi-criteria fusion and Transformer-based modeling. LSCC maintains exploration breadth through risk-stratified clustering. CAG improves CP's discriminative ability through model-conditioned adaptive criterion weighting.
+
+The ablation results show that the performance gain depends on combining CP, LSCC, and CAG. The full method is not merely a risk scorer or a clustering-based coverage strategy. It benefits from coupling fault-aware ranking with controlled behavioral exploration.
+
+\subsection{Time Cost Comparison}
+
+To assess the efficiency of CP, we measured the wall-clock time per test case (250 mutation iterations) on CIFAR-10 with ResNet34. As shown in Table~\ref{tab:time-cost}, CP takes 8.16 seconds per test case, which is lower than KMNC (8.48s) and DistXplore (12.89s) but higher than simpler structural criteria such as NC (3.29s) and SNAC (3.33s). The higher cost of KMNC stems from its layer-wise interval counting structures maintained on the CPU. DistXplore incurs the largest overhead due to its distance-based exploration requiring repeated nearest-neighbor queries over a growing set of class-conditional centers. CP's overhead arises from multi-criteria feature extraction, PCA projection, Transformer inference, and cluster assignment, all of which are batched on GPU. CP effectively balances the trade-off: it achieves the highest FDR among all methods while keeping time consumption within a practical range comparable to KMNC.
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Time cost per test case (250 iterations, seconds) on CIFAR-10 with ResNet34}\label{tab:time-cost}
+  \scriptsize
+  \resizebox{\linewidth}{!}{
+  \begin{tabular}{lccccccc}
+    \toprule
+    NC & NBC & SNAC & TKNC & KMNC & DLRegion & DistXplore & Ours \\
+    \midrule
+    3.29 & 3.57 & 3.33 & 4.98 & 8.48 & 4.35 & 12.89 & 8.16 \\
+    \bottomrule
+  \end{tabular}}
+\end{table}
+
+\subsection{Model Retraining}
+
+Model retraining is often used to assess whether generated or selected test cases have practical value for improving DNN performance~\cite{deepconcolic}. In this work, the retraining of MuTs is used as an auxiliary analysis of the utility of CP risk scores. We rank the training samples by the CP-predicted risk, remove the top 10\% highest-risk samples, and retrain each model for 10 epochs. This experiment evaluates whether CP-guided filtering is able to improve model performance, which suggests that the learned risk scores capture training samples associated with weaker generalization.
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Model retraining results. Accuracy improvements after removing CP-identified high-risk samples and retraining.}\label{tab:retraining}
+  \resizebox{\linewidth}{!}{
+  \scriptsize
+  \begin{tabular}{lccc}
+    \toprule
+    Model & Before & After & Improved \\
+    \midrule
+    LeNet-5     & 99.28\% & 99.48\% & +0.20\% \\
+    ResNet18    & 95.33\% & 95.49\% & +0.16\% \\
+    ResNet34    & 94.46\% & 94.71\% & +0.25\% \\
+    VGG13\_BN   & 95.01\% & 95.11\% & +0.10\% \\
+    AlexNet     & 92.15\% & 93.39\% & +1.24\% \\
+    MobileNetV2 & 94.13\% & 94.46\% & +0.33\% \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+Table~\ref{tab:retraining} reports the test accuracy obtained after retraining with CP-guided sample filtering, and Figure~\ref{fig:retraining} provides the corresponding visualization. Across all evaluated models, removing the top 10\% highest-risk training samples before retraining leads to higher test accuracy, with an average improvement of approximately 0.38\%.
+
+The magnitude of the improvement varies across architectures. Models with strong baseline performance, including ResNet18 and VGG13\_BN, still gain 0.16\% and 0.10\%, respectively. AlexNet obtains the largest improvement, with a gain of 1.24\%, which indicates that CP-guided filtering may be particularly beneficial when the original model leaves more room for improvement. MobileNetV2 improves by 0.33\%, showing that the observed benefit is not confined to a single architecture family.
+
+The same pattern is also observed for lightweight architectures. LeNet-5 starts from a high baseline accuracy of 99.28\%, yet CP-guided filtering further improves its accuracy by 0.20\%. These results indicate that CP can identify training samples whose removal is beneficial during retraining. The retraining analysis should therefore be viewed as supporting evidence for the diagnostic value of CP, rather than as a substitute for the fuzzing evaluation.
+
+
+% ==========================================================================
+%  Section 7: Conclusion
+% ==========================================================================
+\FloatBarrier
+\section{Conclusion}\label{sec:conclusion}
+
+This paper presents a learning-based coverage-guided fuzzing method for deep neural networks. The proposed CP refrains from regarding structural coverage criteria merely as scalar test adequacy metrics. Instead, we transform them into learnable representations and model the association between test coverage and faults through multi-criteria fusion and Transformer-based learning. Furthermore, this paper integrates CP-based risk prediction with latent-space cluster coverage, which forms a dual-signal guidance mechanism that balances fault-revealing and test adequacy. Experimental results on four datasets, 14 distinct architectures, and 20 model-dataset combinations demonstrate that unified learning-based modeling of multiple coverage criteria is capable of improving the initially weak correlation between coverage criteria and model vulnerability and enhancing fault revealing effectiveness. The learned representations in CP further enable risk stratification and per-criterion contribution analysis, thereby providing diagnostic evidence concerning the distribution of model vulnerabilities. In future work, we will explore how learning-based coverage modeling can improve coverage-guided fuzzing for AI systems.
+
+\section*{Acknowledgment}
+This work was supported by the Hubei Provincial Natural Science Foundation of China (Grant No.2025AFB323) and the Natural Science Foundation of Henan (Grant No.262300420296).
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%\section*{CRediT authorship contribution statement}
+%Aoshuang Ye: Conceptualization, Project administration, Supervision, Writing -- original draft, Writing -- review \& editing. Shulin Zhang: Conceptualization, Methodology, Writing -- original draft, Writing -- review \& editing. Benxiao Tang: Conceptualization, Writing -- review \& editing. Jianpeng Ke: Conceptualization. Yiru Zhao: Writing -- review \& editing. Tao Peng: Funding acquisition, Project administration, Supervision.
+
+%\section*{Declaration of competing interest}
+%The authors declare the following financial interests/personal relationships which may be considered as potential competing interests:
+%Aoshuang Ye reports financial support was provided by Wuhan Textile University School of Computer Science and Artificial Intelligence.
+
+
+
+%\begin{thebibliography}{00}
+
+%% For numbered reference style
+%% \bibitem{label}
+%% Text of bibliographic item
+
+%\bibitem{lamport94}
+  %Leslie Lamport,
+  %\textit{\LaTeX: a document preparation system},
+  %Addison Wesley, Massachusetts,
+  %2nd edition,
+ % 1994.
+
+%\end{thebibliography}
+
+\nolinenumbers
+\bibliographystyle{elsarticle-num}
+\bibliography{mybib}
+
+\end{document}
+\endinput
+%%
+%% End of file `elsarticle-template-harv.tex'.
+
