@@ -1,7 +1,5 @@
 # Coverage-based Predictor (CP)
 
-Code for the paper: ***One Model to Rule Them All: Unifying Test Coverage via a Transformer-based Fuzzing for Deep Neural Networks***
-
 ## Overview
 
 Coverage-guided fuzzing (CGF) for DNNs typically relies on scalar coverage values that correlate weakly with model faults. This work proposes a learning-based CGF approach centered on a Coverage-based Predictor (CP). CP treats statistical features derived from multiple coverage criteria as structured representations of DNN behavior and uses a Transformer with Criterion-Aware Gating (CAG) to learn their association with failures. We further introduce Latent Space Clustering Coverage (LSCC) to characterize behavioral-cluster exploration, and combine CP risk scores with LSCC coverage gains as dual feedback for test generation:
@@ -67,10 +65,6 @@ python eval/fuzz_eval_coverage_correlation.py --dataset CIFAR10 --model resnet50
 ## Datasets and Models
 
 Evaluated on four datasets (MNIST, Fashion-MNIST, CIFAR-10, TinyImageNet), 14 distinct DNN architectures, and 20 model-dataset combinations. See Table 1 in the paper for details.
-
-## Acknowledgements
-
-Coverage criteria extended from [NeuraL-Coverage](https://github.com/Yuanyuan-Yuan/NeuraL-Coverage).
 
 ## License
 
