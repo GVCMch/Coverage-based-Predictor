@@ -8,14 +8,15 @@ $$U(x, t) = \text{scp}(x) + \lambda_{\text{LSCC}} \cdot \Delta C(x, t)$$
 
 ## Coverage Criteria
 
-Ten criteria implemented in `coverage.py`, extending [NeuraL-Coverage](https://github.com/Yuanyuan-Yuan/NeuraL-Coverage):
+Ten criteria implemented in `coverage.py`:
 
 | Criterion | Reference |
 |-----------|-----------|
 | NC | DeepXplore, SOSP 2017 |
 | KMNC, NBC, SNAC, TKNC, TKNP | DeepGauge, ASE 2018 |
 | CC | TensorFuzz, ICML 2019 |
-| LSC, DSC | Surprise Adequacy, ICSE/FSE 2019 |
+| LSC | Surprise Adequacy, ICSE 2019 |
+| DSC | Surprise Adequacy, FSE 2020 |
 | NLC | NeuraL-Coverage, ICSE 2023 |
 
 ## Installation
